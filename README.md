@@ -1,165 +1,161 @@
-# MCP Server
+# 🔌 MCP Server — Model Context Protocol STDIO Server for Claude Desktop & Agents
 
-**mcp-server** is a portable Model Context Protocol (MCP) STDIO server that exposes real-world tools — US weather alerts, 7-day forecasts, and AI engineering knowledge search — over JSON-RPC 2.0 on stdin/stdout. Compatible with Claude Desktop, Cursor, any MCP client, or spawnable as a subprocess from your own agent code.
+> **Real weather alerts. Real forecasts. Real AI knowledge search. Over JSON-RPC 2.0 on stdin/stdout.**
 
-![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white)
-![MCP](https://img.shields.io/badge/MCP-JSON--RPC_2.0-orange)
-![Claude Desktop](https://img.shields.io/badge/Claude_Desktop-Compatible-blueviolet)
-![NWS API](https://img.shields.io/badge/NWS_API-No_Key_Required-green)
-![License](https://img.shields.io/badge/License-MIT-green)
+A portable, production-grade MCP STDIO server exposing 3 tools — US weather alerts, 7-day forecasts, and AI engineering knowledge search. Compatible with **Claude Desktop**, **Cursor**, any MCP client, or spawnable as a subprocess from your own agent. No API key needed.
 
----
-
-## What is this?
-
-A production-grade MCP STDIO server implementing the official [MCP Quickstart](https://modelcontextprotocol.io/docs/2026-07-28/develop/build-server) tools plus a local AI knowledge search tool. It uses the official `mcp[cli]` SDK when installed and falls back to a hand-built JSON-RPC 2.0 STDIO handler so it works in minimal Python environments too.
-
-Critical design decisions:
-- **stdout is sacred** — all logs write to `stderr` only via `logging.basicConfig(stream=sys.stderr)`, keeping JSON-RPC messages on stdout uncorrupted
-- **Dual SDK + fallback** — tries `mcp.server.MCPServer` → `FastMCP` → built-in STDIO handler in order
-- **Self-test mode** — `--self-test` flag invokes all tools directly for quick verification
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://python.org)
+[![MCP](https://img.shields.io/badge/MCP-JSON--RPC_2.0-F97316)](https://spec.modelcontextprotocol.io)
+[![Claude Desktop](https://img.shields.io/badge/Claude_Desktop-Compatible-6366F1)](https://claude.ai/download)
+[![NWS API](https://img.shields.io/badge/NWS_API-Free,_No_Key-22c55e)](https://www.weather.gov/documentation/services-web-api)
+[![License: MIT](https://img.shields.io/badge/License-MIT-22c55e)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/ansariazad/mcp-server?style=social)](https://github.com/ansariazad/mcp-server/stargazers)
 
 ---
 
-## Key Features
-
-- **`get_alerts(state)`** — queries [api.weather.gov](https://api.weather.gov) for active NWS weather alerts for any US state; no API key needed
-- **`get_forecast(lat, lon)`** — fetches 5-period detailed weather forecast from NWS for any lat/lon coordinate
-- **`search_ai_playbooks(query)`** — searches a local RAG index covering GPT architecture, RAG techniques, Anthropic agent patterns, MCP protocol, and LLM evals
-- **Claude Desktop config helper** — run `--print-mac-config` to generate the exact JSON snippet to paste into `claude_desktop_config.json`
-- **Self-test mode** — `--self-test` calls all 3 tools and prints results directly (no MCP client needed)
-- **STDIO logging discipline** — zero `print()` calls on stdout; verified by Level 1 eval assertion
-
----
-
-## MCP Protocol Flow
+## 📺 Demo
 
 ```
-MCP Client (Claude Desktop / Agent)
+$ python3 04_mcp_server.py --self-test
+
+━━━ MCP Server Self-Test ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[Tool 1] get_alerts(state="CA")
+         → "No active weather alerts for California."
+
+[Tool 2] get_forecast(latitude=37.7749, longitude=-122.4194)
+         → "Tuesday: Partly Cloudy. High near 68°F.
+            Tuesday Night: Mostly clear. Low around 52°F.
+            Wednesday: Sunny. High near 72°F."
+
+[Tool 3] search_ai_playbooks(query="How does CRAG work?")
+         → "Corrective RAG grades each retrieved chunk for
+            relevance. Below-threshold chunks trigger a global
+            fallback search to avoid hallucination..."
+
+[✓] All 3 tools operational
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+---
+
+## 📑 Table of Contents
+
+- [Why This Exists](#-why-this-exists)
+- [Tools Reference](#-tools-reference)
+- [Protocol Flow](#-protocol-flow)
+- [Quick Start](#-quick-start)
+- [Claude Desktop Setup](#-claude-desktop-setup)
+- [Cursor Setup](#-cursor-setup)
+- [Use in Your Own Agent](#-use-in-your-own-agent)
+- [Design Decisions](#-design-decisions)
+- [Eval Results](#-eval-results)
+- [Roadmap](#-roadmap)
+- [References](#-references)
+
+---
+
+## 💡 Why This Exists
+
+Most MCP server examples are toy demos. This one is **production-ready**:
+
+| Feature | This Repo | Typical MCP Tutorial |
+|---------|-----------|---------------------|
+| Runs without MCP SDK installed | ✅ built-in fallback | ❌ SDK required |
+| stdout clean (no log corruption) | ✅ stderr-only logging | ❌ often breaks JSON-RPC |
+| Self-test mode | ✅ `--self-test` flag | ❌ |
+| Claude Desktop config helper | ✅ `--print-mac-config` | ❌ |
+| Real external API (NWS) | ✅ | ❌ usually mocked |
+| Eval tested | ✅ | ❌ |
+
+---
+
+## 🛠️ Tools Reference
+
+| Tool | Parameters | Returns | Source |
+|------|-----------|---------|--------|
+| `get_alerts` | `state: str` (2-letter, e.g. `"CA"`) | Active NWS weather alerts | `api.weather.gov/alerts` |
+| `get_forecast` | `latitude: float`, `longitude: float` | 5-period detailed forecast | `api.weather.gov/points` |
+| `search_ai_playbooks` | `query: str` | AI engineering knowledge | Local TF-IDF RAG index |
+
+---
+
+## 📡 Protocol Flow
+
+```
+MCP Client (Claude Desktop / Cursor / Your Agent)
         │
-        │   stdin: {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
+        │  stdin:  {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
         ▼
-┌─────────────────────────────────────────────────┐
-│              04_mcp_server.py                    │
-│                                                  │
-│  PortableMCPServer                               │
-│    ├─ tools/list    → registered tool schemas    │
-│    └─ tools/call    → invoke tool function       │
-│         ├─ get_alerts(state)                     │
-│         ├─ get_forecast(latitude, longitude)     │
-│         └─ search_ai_playbooks(query)            │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│               04_mcp_server.py                       │
+│                                                      │
+│  STDIO transport (stdin → parse → dispatch → stdout)│
+│  stderr → logging ONLY (stdout stays clean for JSON)│
+│                                                      │
+│  JSON-RPC 2.0 Dispatcher:                           │
+│    tools/list  → returns registered tool schemas     │
+│    tools/call  → invokes the named tool function     │
+│       ├─ get_alerts(state)                          │
+│       ├─ get_forecast(latitude, longitude)           │
+│       └─ search_ai_playbooks(query)                 │
+└─────────────────────────────────────────────────────┘
         │
-        │   stdout: {"jsonrpc":"2.0","id":1,"result":{"content":[...]}}
+        │  stdout: {"jsonrpc":"2.0","id":1,"result":{"content":[...]}}
         ▼
 MCP Client receives tool result
 ```
 
 ---
 
-## Tools Reference
+## 🚀 Quick Start
 
-| Tool | Parameters | Returns | API Used |
-|------|-----------|---------|----------|
-| `get_alerts` | `state: str` (2-letter, e.g. `"CA"`) | Active weather alerts text | `api.weather.gov/alerts/active?area={state}` |
-| `get_forecast` | `latitude: float`, `longitude: float` | 5-period forecast text | `api.weather.gov/points/{lat},{lon}/forecast` |
-| `search_ai_playbooks` | `query: str` | Relevant AI engineering knowledge chunks | Local RAG index (TF-IDF) |
-
----
-
-## Prerequisites
-
-**Python 3.11+** required.
-
-### macOS
 ```bash
-brew install python@3.11
+# Clone
+git clone https://github.com/ansariazad/mcp-server.git
+cd mcp-server
 
-# Install MCP SDK (optional — built-in fallback works without it)
-pip install "mcp[cli]"
-# Or with uv:
-uv add "mcp[cli]"
-```
-
-### Windows / Linux
-```bash
-pip install "mcp[cli]"
-```
-
-> [!TIP]
-> The server works with zero dependencies using the built-in JSON-RPC 2.0 fallback handler. Install `mcp[cli]` only if you want the official SDK features (resource subscriptions, prompts, etc.).
-
----
-
-## Quick Start
-
-### 1. Run as standalone MCP STDIO server
-```bash
-# With uv (recommended for Claude Desktop)
-uv run 04_mcp_server.py
-
-# With python directly
-python3 04_mcp_server.py
-```
-
-### 2. Self-test all tools
-```bash
+# Self-test all tools
 python3 04_mcp_server.py --self-test
-```
 
-**Expected output:**
-```
-[self-test] get_alerts(CA):
-  No active weather alerts for CA
+# Start STDIO server (for Claude Desktop / Cursor)
+python3 04_mcp_server.py
 
-[self-test] get_forecast(37.7749, -122.4194):
-  Tuesday: Partly cloudy. High near 68°F...
-
-[self-test] search_ai_playbooks("How does CRAG work?"):
-  CRAG grades retrieved documents for relevance, discards below-threshold chunks...
-```
-
-### 3. Print Claude Desktop config
-```bash
+# Print Claude Desktop config snippet
 python3 04_mcp_server.py --print-mac-config
 ```
 
 ---
 
-## Claude Desktop Integration
+## 🖥️ Claude Desktop Setup
 
-Add this to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+**Step 1:** Get your config path:
+```bash
+python3 04_mcp_server.py --print-mac-config
+```
 
+**Step 2:** Add output to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "ai-engineering": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--with",
-        "mcp[cli]",
-        "mcp",
-        "run",
-        "/path/to/mcp-server/04_mcp_server.py"
-      ],
-      "cwd": "/path/to/mcp-server"
+      "command": "python3",
+      "args": ["/absolute/path/to/mcp-server/04_mcp_server.py"],
+      "cwd": "/absolute/path/to/mcp-server"
     }
   }
 }
 ```
 
-Then restart Claude Desktop — the tools will appear in the tool picker.
+**Step 3:** Restart Claude Desktop — tools appear in the tool picker automatically.
 
-> [!NOTE]
-> Replace `/path/to/mcp-server` with the actual path where you cloned this repo.
+> [!TIP]
+> Use `uv run 04_mcp_server.py` as the command if you have `uv` installed — it auto-manages the Python environment.
 
 ---
 
-## Cursor / VS Code Integration
+## 🖱️ Cursor Setup
 
-Add to `.cursor/mcp.json` or the Cursor MCP settings:
-
+Add to `.cursor/mcp.json` in your project root:
 ```json
 {
   "mcpServers": {
@@ -173,89 +169,110 @@ Add to `.cursor/mcp.json` or the Cursor MCP settings:
 
 ---
 
-## Spawn from Your Own Agent
+## 🤖 Use in Your Own Agent
 
 ```python
 import subprocess, json
 
 proc = subprocess.Popen(
     ["python3", "04_mcp_server.py"],
-    stdin=subprocess.PIPE,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    text=True,
-    cwd="/path/to/mcp-server"
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE, text=True,
 )
 
-# Call get_alerts
-req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-       "params": {"name": "get_alerts", "arguments": {"state": "CA"}}}
-proc.stdin.write(json.dumps(req) + "\n")
-proc.stdin.flush()
+def call_tool(name: str, arguments: dict) -> str:
+    req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+           "params": {"name": name, "arguments": arguments}}
+    proc.stdin.write(json.dumps(req) + "\n")
+    proc.stdin.flush()
+    resp = json.loads(proc.stdout.readline())
+    return resp["result"]["content"][0]["text"]
 
-response = json.loads(proc.stdout.readline())
-print(response["result"]["content"][0]["text"])
+print(call_tool("get_alerts", {"state": "NY"}))
+print(call_tool("get_forecast", {"latitude": 40.71, "longitude": -74.00}))
+print(call_tool("search_ai_playbooks", {"query": "What is RAG?"}))
 ```
 
 ---
 
-## Environment Variables
+## 🔧 Design Decisions
 
-No API keys required. The NWS API is free and public.
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| *(none required)* | — | — |
-
----
-
-## File Structure
-
+**stdout is sacred:**
+```python
+# ALL logging goes to stderr — stdout is reserved for JSON-RPC only
+logging.basicConfig(stream=sys.stderr)
+# → L1_MCP_Server_Zero_Stdout_Print_Calls eval: 0 print() calls found
 ```
-mcp-server/
-├── 04_mcp_server.py     # MCP STDIO server (tools + JSON-RPC 2.0 fallback)
-├── setup_and_run_mac.sh # macOS setup script
-├── requirements.txt     # Python dependencies
-├── .env.example         # Environment template
-├── .gitignore
-└── README.md
+
+**SDK + built-in fallback:**
+```python
+try:
+    from mcp.server import MCPServer    # official SDK
+except ImportError:
+    try:
+        from mcp import FastMCP         # FastMCP alternative
+    except ImportError:
+        pass                            # use PortableMCPServer (built-in)
 ```
 
 ---
 
-## Eval Results
+## 🧪 Eval Results
 
-Tested by [`ai-evals-suite`](https://github.com/ansariazad/ai-evals-suite):
+Verified by [`ai-evals-suite`](https://github.com/ansariazad/ai-evals-suite):
 
-| Assertion | Result |
-|-----------|--------|
-| `L1_MCP_Server_Zero_Stdout_Print_Calls` | ✅ PASS — zero print() on stdout |
-| `L1_MCP_STDIO_End_To_End_Tool_Invocation` | ✅ PASS — all 3 tools called & responded |
-
----
-
-## References
-
-- [MCP Specification](https://spec.modelcontextprotocol.io/) — Anthropic
-- [MCP Quickstart: Build a Server](https://modelcontextprotocol.io/docs/2026-07-28/develop/build-server)
-- [NWS Web API](https://www.weather.gov/documentation/services-web-api) — National Weather Service
-- [Claude Desktop MCP Docs](https://modelcontextprotocol.io/quickstart/user)
-- [JSON-RPC 2.0 Specification](https://www.jsonrpc.org/specification)
+| Assertion | Method | Result |
+|-----------|--------|--------|
+| `L1_MCP_Server_Zero_Stdout_Print_Calls` | AST parse, count `print()` nodes | ✅ PASS — 0 found |
+| `L1_MCP_STDIO_End_To_End_Tool_Invocation` | Spawn subprocess, call 3 tools | ✅ PASS — all 3 responded |
 
 ---
 
-## Contributing
+## 🗺️ Roadmap
 
-Pull requests welcome! Suggested additions: Google Maps geocoding tool, Wikipedia search, local file system tools.
+- [ ] Google Maps geocoding tool
+- [ ] Wikipedia search tool
+- [ ] Local filesystem tool (with path guardrail)
+- [ ] MCP resources & prompts support
+- [ ] SSE transport option
 
 ---
 
-## License
+## 📚 References
+
+| Resource | |
+|----------|-|
+| [MCP Specification](https://spec.modelcontextprotocol.io/) | Anthropic |
+| [MCP Quickstart: Build a Server](https://modelcontextprotocol.io/docs/2026-07-28/develop/build-server) | Anthropic |
+| [NWS Web API](https://www.weather.gov/documentation/services-web-api) | National Weather Service |
+| [Claude Desktop Integration](https://modelcontextprotocol.io/quickstart/user) | Anthropic |
+| [JSON-RPC 2.0 Spec](https://www.jsonrpc.org/specification) | — |
+
+---
+
+## 🤝 Contributing
+
+PRs welcome! Adding a new tool is simple — register it in `PortableMCPServer.__init__` and implement the function.
+
+---
+
+## ⭐ Support
+
+Building with MCP? **Star the repo** to help others find a clean reference!
+
+[![GitHub stars](https://img.shields.io/github/stars/ansariazad/mcp-server?style=for-the-badge)](https://github.com/ansariazad/mcp-server/stargazers)
+
+---
+
+## 📄 License
 
 MIT © 2026
 
 ---
 
-## Author
+## 👤 Author
 
-**Azad Ansari** — [GitHub](https://github.com/ansariazad) | [AutoShorts](https://github.com/ansariazad/AutoShorts)
+**Azad Ansari** — Python Developer & AI Engineer, Mumbai
+
+[![GitHub](https://img.shields.io/badge/GitHub-ansariazad-181717?logo=github)](https://github.com/ansariazad)
+[![Portfolio](https://img.shields.io/badge/Portfolio-ansariazad.github.io-blue)](https://ansariazad.github.io)
